@@ -1,6 +1,7 @@
 const Papa = require('papaparse');
 const https = require('https');
 const fs = require('fs');
+const { execSync } = require('child_process');
 
 // ============================================================
 // 用法（在底部修改参数后运行）：
@@ -77,6 +78,7 @@ function calculateDistances(inputAddress, selectedCity, inputFilePath, outputFil
                     console.log(`已写入：${outputFilePath}`);
                     console.log('\n下一步：上传更新后的文件到 Supabase Storage');
                     console.log('  路径：restaurants-data/restaurants.csv');
+                    gitCommitAndPush(outputFilePath);
                 });
         })
         .catch(err => {
@@ -178,6 +180,25 @@ function getRestaurantDistance(origin, destinationAddress) {
             }
             throw new Error('路线规划失败');
         });
+}
+
+// ============================================================
+// 数据更新完成后，自动 git commit + push 到远程仓库
+// ============================================================
+function gitCommitAndPush(filePath) {
+    try {
+        const today = new Date().toLocaleDateString('zh-CN', {
+            year: 'numeric', month: '2-digit', day: '2-digit'
+        }).replace(/\//g, '-');
+        console.log('\n正在自动推送到远程仓库...');
+        execSync(`git add "${filePath}"`, { stdio: 'inherit' });
+        execSync(`git commit -m "数据更新：${today}"`, { stdio: 'inherit' });
+        execSync('git push origin main', { stdio: 'inherit' });
+        console.log('推送完成！');
+    } catch (err) {
+        console.error('自动推送失败：', err.message);
+        console.log('请手动运行：git add rest_data_process/restaurants.csv && git commit -m "数据更新" && git push origin main');
+    }
 }
 
 // ============================================================
