@@ -396,6 +396,7 @@ function calculateNearestLocation(userPosition) {
             }
 
             updateTimeFilterUI();
+            updateDistanceFilterVisibility();
             updateRestaurantCount();
         })
         .catch(error => {
@@ -410,6 +411,7 @@ function calculateDirectDistance(nearestLocation) {
         directDistances = event.data;
         console.log('Direct distances calculated:', directDistances);
         updateTimeFilterUI();
+        updateDistanceFilterVisibility(); // 确保直线距离计算完成后显示滑块
         updateRestaurantCount();
         showCalcRealDrivingButton(true);
     };
@@ -665,10 +667,12 @@ function updateTimeFilterUI() {
                     updateRestaurantCount();
                     return;
                 } else if (directDistances.length > 0) { // 确保有计算结果
+                    filterContainer.style.display = 'block'; // 有直线距离数据时显示滑块
                     const maxDistance = Math.max(...directDistances.map(d => d.distance));
                     slider.max = Math.min(40, maxDistance); // 设置最大直线距离
                     slider.value = DEFAULT_DISTANCE_KM; // 默认 5 千米
                     valueDisplay.textContent = `${slider.value} km 直线距离内`; // 更新单位
+                    updateSliderBackground(slider);
                 } else {
                     filterContainer.style.display = 'none'; // 如果没有计算结果，隐藏滑块
                 }
@@ -874,25 +878,27 @@ function updateDistanceFilterVisibility() {
     const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
     const slider = document.getElementById('distance');
     
-    console.log('User city:', userCity);
-    console.log('Selected city:', selectedCity);
-    console.log('Direct distance:', directDistance);
+    // 有定位且有距离数据时显示滑块（城市匹配 或 已有直线/车程数据）
+    const hasDistanceData = nearestLocation && (directDistances.length > 0 || !directDistance || realDrivingMode);
+    const cityMatches = userPosition && userCity && compareCityNames(userCity, selectedCity);
+    const shouldShow = userPosition && (cityMatches || hasDistanceData);
     
-    if (userPosition && userCity && compareCityNames(userCity, selectedCity)) {
+    console.log('User city:', userCity, 'Selected city:', selectedCity, 'hasDistanceData:', hasDistanceData);
+    
+    if (shouldShow) {
         console.log('Showing distance filter');
         filterContainer.style.display = 'block';
         slider.value = directDistance ? String(DEFAULT_DISTANCE_KM) : "30";
         
-        // 使用 setTimeout 确保在 DOM 更新后更新背景
         setTimeout(() => {
             updateSliderBackground(slider);
-            updateTimeFilterUI(); // 更新滑块UI
+            updateTimeFilterUI();
         }, 0);
     } else {
         console.log('Hiding distance filter');
         filterContainer.style.display = 'none';
     }
-    updateRestaurantCount(); // 更新餐厅数量
+    updateRestaurantCount();
     updateDebugInfo();
 }
 
