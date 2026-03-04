@@ -421,9 +421,7 @@ function calculateDirectDistance(nearestLocation) {
         updateTimeFilterUI();
         updateDistanceFilterVisibility();
         updateRestaurantCount();
-        if (directDistances.length > 0) {
-            showCalcRealDrivingButton(true);  // 只有有直线距离数据时才显示计算按钮
-        }
+        updateCalcButtonVisibility();
     };
     
     const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
@@ -438,6 +436,44 @@ function showCalcRealDrivingButton(show) {
     if (show && isPhaseRunning) return;  // 计算进行中，不允许重新显示按钮
     const btn = document.getElementById('calc-real-driving');
     if (btn) btn.classList.toggle('hidden', !show);
+}
+
+// 根据当前筛选范围内是否有未计算真实车程的餐厅，动态决定是否显示计算按钮
+function updateCalcButtonVisibility() {
+    if (!directDistance || isPhaseRunning) {
+        showCalcRealDrivingButton(false);
+        return;
+    }
+
+    const slider = document.getElementById('distance');
+    const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
+
+    // 预构建城市匹配的餐厅名称集合，避免 O(n²) 查找
+    const cityRestaurantNames = new Set(
+        restaurants
+            .filter(r => selectedCity === '所有城市' || compareCityNames(formatCityName(r.city), selectedCity))
+            .map(r => r.name)
+    );
+
+    let hasUncomputed;
+    if (!realDrivingMode) {
+        // 直线距离模式：只检查当前 km 滑块范围内的餐厅
+        const currentMaxKm = parseInt(slider.value) || DEFAULT_DISTANCE_KM;
+        hasUncomputed = directDistances.some(d =>
+            d.distance <= currentMaxKm &&
+            cityRestaurantNames.has(d.name) &&
+            !drivingDistances[d.name]
+        );
+    } else {
+        // 真实车程模式：检查是否还有任何城市内未计算的餐厅
+        // 用户可能拖动了滑块扩大范围，需要补充计算
+        hasUncomputed = directDistances.some(d =>
+            cityRestaurantNames.has(d.name) &&
+            !drivingDistances[d.name]
+        );
+    }
+
+    showCalcRealDrivingButton(hasUncomputed);
 }
 
 function showDrivingStatus(msg) {
@@ -538,7 +574,7 @@ function startRealDrivingPhase2() {
         isPhaseRunning = false;
         hideDrivingStatus();
         updateTimeFilterUI();
-        updateRestaurantCount();
+        updateRestaurantCount();  // 内部会调用 updateCalcButtonVisibility
         console.log('Phase 2 complete, total calculated:', Object.keys(drivingDistances).length);
     }).catch(err => {
         console.error('Phase 2 error:', err);
@@ -727,9 +763,6 @@ function updateSlider() {
         const value = parseInt(slider.value);
         if (realDrivingMode) {
             output.textContent = `${value} min 车程内`;
-            if (!phase2Complete && !phase2InProgress && value > PHASE2_TRIGGER_MIN) {
-                startRealDrivingPhase2();
-            }
         } else {
             output.textContent = directDistance ? `${value} km 直线距离内` : `${value} min 车程内`;
         }
@@ -737,7 +770,7 @@ function updateSlider() {
         updateSliderBackground(slider);
         console.log('Slider updated:', value);
         
-        // 每次滑块更新时都更新餐厅计数
+        // 每次滑块更新时都更新餐厅计数（updateRestaurantCount 内部会调用 updateCalcButtonVisibility）
         updateRestaurantCount();
     } else {
         console.warn('Slider elements not found');
@@ -851,6 +884,7 @@ function updateRestaurantCount() {
     } else {
         console.warn('Restaurant count, city element, or slider not found');
     }
+    updateCalcButtonVisibility(); // 每次更新餐厅数量时同步刷新计算按钮的显示状态
 }
 
 // 随机选择餐厅
@@ -950,7 +984,13 @@ function init() {
     // 计算真实车程按钮
     document.getElementById('calc-real-driving')?.addEventListener('click', () => {
         showCalcRealDrivingButton(false);
-        startRealDrivingPhase1();
+        if (realDrivingMode) {
+            // 已在真实车程模式：计算当前城市内所有剩余未计算的餐厅
+            startRealDrivingPhase2();
+        } else {
+            // 直线距离模式：计算当前滑块 km 范围内的餐厅
+            startRealDrivingPhase1();
+        }
     });
 
     // 停止计算车程按钮
