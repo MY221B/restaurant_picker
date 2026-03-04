@@ -140,6 +140,16 @@ bash update.sh
 
 脚本会依次完成：合并数据 → 获取经纬度 → 计算驾车距离 → 推送到 GitHub。任意步骤失败时自动停止。
 
+每次的完整流程只需要一行：
+bash update.sh
+
+脚本会按顺序自动完成所有步骤：
+步骤	动作
+1/3	merge_new_restaurants.py — 合并新数据
+2/3	restaurants_lat_long.py — 获取经纬度
+3/3	distance.js — 计算驾车距离 + 推送到 GitHub
+有一点要注意：distance.js 里起点地址是写死的（目前是 北京建外soho西区），每次计算的是同一个起点。如果你需要换起点，还是要手动改一下 distance.js 底部的参数，然后再跑 bash update.sh。
+
 ---
 
 ### 分步执行（需要调试时使用）

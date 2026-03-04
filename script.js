@@ -14,6 +14,8 @@ let userCity = null;
 let initCount = 0;
 
 const API_KEY = 'd111bbe935342b4ac8d1707ff6523552';
+const SUPABASE_URL = 'https://tazccareqiurrsgfzong.supabase.co';
+const SUPABASE_ANON_KEY = '';
 
 // 在文件开头添加这些变量引用
 let loadingMessage, errorMessage, restaurantCount;
@@ -45,7 +47,7 @@ function loadDefaultCSV() {
         restaurantCount.classList.add('hidden');
         errorMessage.classList.add('hidden');
 
-        fetch('https://gganjajxoehdxpiyiqdl.supabase.co/storage/v1/object/public/restaurants-data/restaurants.csv')
+        fetch(`${SUPABASE_URL}/storage/v1/object/public/restaurants-data/restaurants.csv`)
             .then(response => response.text())
             .then(csvData => {
                 processCSVData(csvData);
