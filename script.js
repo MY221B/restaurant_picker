@@ -20,6 +20,7 @@ let phase1Complete   = false;
 let phase2Complete   = false;
 let phase2InProgress = false;
 let drivingCalcAborted = false;  // 用户点击停止时设为 true
+let directDistanceGeneration = 0;  // 防止旧 Worker 回调覆盖新数据
 const PHASE1_MAX_KM      = 15;
 const PHASE2_TRIGGER_MIN = 30;
 const DEFAULT_DISTANCE_KM = 5;  // 直线距离模式下的默认距离（千米）
@@ -316,7 +317,8 @@ function calculateNearestLocation(userPosition) {
     realDrivingMode = false;
     drivingDistances = {};
     phase1Complete = phase2Complete = phase2InProgress = false;
-    drivingCalcAborted = false;
+    drivingCalcAborted = true;  // 终止任何正在进行的驾车计算
+    directDistanceGeneration++;  // 使旧 Worker 回调失效，防止重新显示按钮
     hideDrivingStatus();
     showCalcRealDrivingButton(false);
 
@@ -407,13 +409,19 @@ function calculateNearestLocation(userPosition) {
 // 新增计算直线距离的函数
 function calculateDirectDistance(nearestLocation) {
     const worker = new Worker('distanceWorker.js');
+    const myGeneration = directDistanceGeneration;  // 捕获当前代数
     worker.onmessage = function(event) {
+        if (myGeneration !== directDistanceGeneration) {
+            return;  // 这是旧 Worker 的回调，忽略它
+        }
         directDistances = event.data;
         console.log('Direct distances calculated:', directDistances);
         updateTimeFilterUI();
-        updateDistanceFilterVisibility(); // 确保直线距离计算完成后显示滑块
+        updateDistanceFilterVisibility();
         updateRestaurantCount();
-        showCalcRealDrivingButton(true);
+        if (directDistances.length > 0) {
+            showCalcRealDrivingButton(true);  // 只有有直线距离数据时才显示计算按钮
+        }
     };
     
     const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
@@ -478,7 +486,7 @@ function startRealDrivingPhase1() {
     }).then(() => {
         phase1Complete = true;
         realDrivingMode = true;
-        hideDrivingStatus();
+        hideDrivingStatus();  // 正常完成或用户已点停止，都确保隐藏
         updateTimeFilterUI();
         updateRestaurantCount();
         console.log('Phase 1 complete, calculated:', Object.keys(drivingDistances).length);
@@ -515,7 +523,7 @@ function startRealDrivingPhase2() {
     }).then(() => {
         phase2Complete = true;
         phase2InProgress = false;
-        hideDrivingStatus();
+        hideDrivingStatus();  // 正常完成或用户已点停止，都确保隐藏
         updateTimeFilterUI();
         updateRestaurantCount();
         console.log('Phase 2 complete, total calculated:', Object.keys(drivingDistances).length);
@@ -781,6 +789,7 @@ function updateCitySelect(city) {
             selectedCitySpan.textContent = '所有城市';
         }
         
+        updateTimeFilterUI();
         updateDistanceFilterVisibility();
         updateRestaurantCount(); // 更新餐厅数量
     }
@@ -878,10 +887,10 @@ function updateDistanceFilterVisibility() {
     const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
     const slider = document.getElementById('distance');
     
-    // 有定位且有距离数据时显示滑块（城市匹配 或 已有直线/车程数据）
+    // 有定位且有距离数据时才显示滑块
+    // 条件：nearestLocation 已确定 AND（直线距离数据已计算完成 OR 预存模式 OR 已进入真实车程模式）
     const hasDistanceData = nearestLocation && (directDistances.length > 0 || !directDistance || realDrivingMode);
-    const cityMatches = userPosition && userCity && compareCityNames(userCity, selectedCity);
-    const shouldShow = userPosition && (cityMatches || hasDistanceData);
+    const shouldShow = userPosition && !!hasDistanceData;
     
     console.log('User city:', userCity, 'Selected city:', selectedCity, 'hasDistanceData:', hasDistanceData);
     
@@ -889,11 +898,7 @@ function updateDistanceFilterVisibility() {
         console.log('Showing distance filter');
         filterContainer.style.display = 'block';
         slider.value = directDistance ? String(DEFAULT_DISTANCE_KM) : "30";
-        
-        setTimeout(() => {
-            updateSliderBackground(slider);
-            updateTimeFilterUI();
-        }, 0);
+        updateSliderBackground(slider);
     } else {
         console.log('Hiding distance filter');
         filterContainer.style.display = 'none';
@@ -937,6 +942,8 @@ function init() {
     // 停止计算车程按钮
     document.getElementById('driving-stop-btn')?.addEventListener('click', () => {
         drivingCalcAborted = true;
+        hideDrivingStatus();  // 立即隐藏加载动画，无需等待当前 batch 完成
+        // .then() 回调仍会在当前 batch 完成后执行，做最终状态收尾
     });
 
     // 添加随机选择按钮的事件监听器
