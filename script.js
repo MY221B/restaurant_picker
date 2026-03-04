@@ -288,6 +288,7 @@ function calculateNearestLocation(userPosition) {
 
     nearestLocation = null;
     minDrivingTime = Infinity;
+    directDistance = false;
 
     const promises = savedLocations.map(location => {
         console.log('Processing location:', location);
