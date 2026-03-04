@@ -13,6 +13,15 @@ let directDistances = [];
 let userCity = null;
 let initCount = 0;
 
+// 真实驾车距离分阶段计算
+let realDrivingMode = false;
+let drivingDistances = {};   // { name: { distance(m), duration(s) } }
+let phase1Complete   = false;
+let phase2Complete   = false;
+let phase2InProgress = false;
+const PHASE1_MAX_KM      = 15;
+const PHASE2_TRIGGER_MIN = 30;
+
 const API_KEY = 'd111bbe935342b4ac8d1707ff6523552';
 const SUPABASE_URL = 'https://tazccareqiurrsgfzong.supabase.co';
 const SUPABASE_ANON_KEY = '';
@@ -289,6 +298,11 @@ function calculateNearestLocation(userPosition) {
     nearestLocation = null;
     minDrivingTime = Infinity;
     directDistance = false;
+    realDrivingMode = false;
+    drivingDistances = {};
+    phase1Complete = phase2Complete = phase2InProgress = false;
+    hideDrivingStatus();
+    showCalcRealDrivingButton(false);
 
     const promises = savedLocations.map(location => {
         console.log('Processing location:', location);
@@ -356,6 +370,8 @@ function calculateDirectDistance(nearestLocation) {
         directDistances = event.data;
         console.log('Direct distances calculated:', directDistances);
         updateTimeFilterUI();
+        updateRestaurantCount();
+        showCalcRealDrivingButton(true);
     };
     
     const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
@@ -363,6 +379,106 @@ function calculateDirectDistance(nearestLocation) {
     
     worker.postMessage({ userPosition, restaurants: cityRestaurants });
     console.log('计算直线距离中');
+}
+
+// ── 真实驾车距离：辅助 UI ───────────────────────────────────────────
+function showCalcRealDrivingButton(show) {
+    const btn = document.getElementById('calc-real-driving');
+    if (btn) btn.classList.toggle('hidden', !show);
+}
+
+function showDrivingStatus(msg) {
+    document.getElementById('driving-status-text').textContent = msg;
+    document.getElementById('driving-status').classList.remove('hidden');
+}
+
+function hideDrivingStatus() {
+    const el = document.getElementById('driving-status');
+    if (el) el.classList.add('hidden');
+}
+
+// ── 真实驾车距离：Phase 1（直线 ≤ 15 km 的餐厅）───────────────────
+function startRealDrivingPhase1() {
+    const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
+    const cityRestaurants = restaurants.filter(r =>
+        compareCityNames(formatCityName(r.city), selectedCity) && r['经纬度']
+    );
+    const phase1List = cityRestaurants.filter(r => {
+        const d = directDistances.find(dd => dd.name === r.name);
+        return d && d.distance <= PHASE1_MAX_KM;
+    });
+
+    if (phase1List.length === 0) {
+        phase1Complete = true;
+        realDrivingMode = true;
+        updateTimeFilterUI();
+        updateRestaurantCount();
+        return;
+    }
+
+    showDrivingStatus(`正在计算 ${phase1List.length} 家附近餐厅的真实车程...`);
+
+    calcDrivingBatch(phase1List).then(() => {
+        phase1Complete = true;
+        realDrivingMode = true;
+        hideDrivingStatus();
+        updateTimeFilterUI();
+        updateRestaurantCount();
+        console.log('Phase 1 complete, calculated:', Object.keys(drivingDistances).length);
+    });
+}
+
+// ── 真实驾车距离：Phase 2（剩余餐厅，滑块 > 30 min 时触发）────────
+function startRealDrivingPhase2() {
+    if (phase2InProgress || phase2Complete) return;
+    phase2InProgress = true;
+
+    const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
+    const cityRestaurants = restaurants.filter(r =>
+        compareCityNames(formatCityName(r.city), selectedCity) && r['经纬度']
+    );
+    const phase2List = cityRestaurants.filter(r => !drivingDistances[r.name]);
+
+    if (phase2List.length === 0) {
+        phase2Complete = true;
+        phase2InProgress = false;
+        return;
+    }
+
+    showDrivingStatus(`正在扩大范围，计算剩余 ${phase2List.length} 家餐厅的车程...`);
+
+    calcDrivingBatch(phase2List).then(() => {
+        phase2Complete = true;
+        phase2InProgress = false;
+        hideDrivingStatus();
+        updateTimeFilterUI();
+        updateRestaurantCount();
+        console.log('Phase 2 complete, total calculated:', Object.keys(drivingDistances).length);
+    });
+}
+
+// ── 真实驾车距离：批量调高德 API（每批 10 个并发）─────────────────
+async function calcDrivingBatch(restaurantList, batchSize = 10) {
+    for (let i = 0; i < restaurantList.length; i += batchSize) {
+        const batch = restaurantList.slice(i, i + batchSize);
+        await Promise.all(batch.map(r => {
+            const coords = r['经纬度']; // 高德格式：lng,lat
+            const url = `https://restapi.amap.com/v3/direction/driving?origin=${userPosition.lng},${userPosition.lat}&destination=${coords}&extensions=base&key=${API_KEY}`;
+            return fetch(url)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === '1' && data.route?.paths?.length > 0) {
+                        const path = data.route.paths[0];
+                        drivingDistances[r.name] = {
+                            distance: parseFloat(path.distance),
+                            duration: parseFloat(path.duration)
+                        };
+                    }
+                })
+                .catch(() => {});
+        }));
+        if (realDrivingMode) updateRestaurantCount();
+    }
 }
 
 // 获取餐厅的经纬度
@@ -467,12 +583,19 @@ function updateTimeFilterUI() {
         if (nearestLocation) {
             filterContainer.style.display = 'block';
             if (directDistance) {
-                if (directDistances.length > 0) { // 确保有计算结果
+                if (realDrivingMode) {
+                    const maxTime = Math.max(...Object.values(drivingDistances).map(d => d.duration / 60), 30);
+                    slider.max = 120;
+                    if (!slider.value || parseInt(slider.value) < 1) slider.value = Math.min(30, maxTime);
+                    valueDisplay.textContent = `${slider.value} min 车程内`;
+                    updateSliderBackground(slider);
+                    updateRestaurantCount();
+                    return;
+                } else if (directDistances.length > 0) { // 确保有计算结果
                     const maxDistance = Math.max(...directDistances.map(d => d.distance));
-                    slider.max = Math.min(40, maxDistance)// 设置最大直线距离
+                    slider.max = Math.min(40, maxDistance); // 设置最大直线距离
                     slider.value = 10; // 设置默认值
                     valueDisplay.textContent = `${slider.value} km 直线距离内`; // 更新单位
-                    
                 } else {
                     filterContainer.style.display = 'none'; // 如果没有计算结果，隐藏滑块
                 }
@@ -502,8 +625,15 @@ function updateSlider() {
     const slider = document.getElementById('distance');
     const output = document.getElementById('distance-value');
     if (slider && output) {
-        const value = slider.value;
-        output.textContent = directDistance ? `${value} km 直线距离内` : `${value} min 车程内`; // 更新单位
+        const value = parseInt(slider.value);
+        if (realDrivingMode) {
+            output.textContent = `${value} min 车程内`;
+            if (!phase2Complete && !phase2InProgress && value > PHASE2_TRIGGER_MIN) {
+                startRealDrivingPhase2();
+            }
+        } else {
+            output.textContent = directDistance ? `${value} km 直线距离内` : `${value} min 车程内`;
+        }
         // 更新滑块的背景颜色
         updateSliderBackground(slider);
         console.log('Slider updated:', value);
@@ -590,7 +720,12 @@ function filterRestaurants(maxDistance) {
         if (filterContainer.style.display === 'none') {
             return cityMatch;
         }
-        
+
+        if (realDrivingMode) {
+            const d = drivingDistances[r.name];
+            return cityMatch && !!d && (d.duration / 60) <= maxDistance;
+        }
+
         if (directDistance) {
             const restaurantDistance = directDistances.find(d => d.name === r.name)?.distance;
             return cityMatch && restaurantDistance && restaurantDistance <= maxDistance;
@@ -714,7 +849,13 @@ function init() {
         updateDebugInfo();
     }, 0);
     
-    // 添加机选择按钮的事件监听器
+    // 计算真实车程按钮
+    document.getElementById('calc-real-driving')?.addEventListener('click', () => {
+        showCalcRealDrivingButton(false);
+        startRealDrivingPhase1();
+    });
+
+    // 添加随机选择按钮的事件监听器
     const randomSelectButton = document.getElementById('random-select');
     if (randomSelectButton) {
         randomSelectButton.addEventListener('click', () => {
