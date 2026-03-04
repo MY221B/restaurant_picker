@@ -56,8 +56,14 @@
                 <button id="calc-real-driving" class="hidden">计算真实车程距离</button>
 
                 <div id="driving-status" class="hidden">
-                    <span class="driving-spinner"></span>
-                    <span id="driving-status-text"></span>
+                    <div class="driving-status-row">
+                        <span class="driving-spinner"></span>
+                        <span id="driving-status-text"></span>
+                        <button id="driving-stop-btn" type="button" class="driving-stop-btn">停止</button>
+                    </div>
+                    <div class="driving-progress-bar">
+                        <div id="driving-progress-fill" class="driving-progress-fill"></div>
+                    </div>
                 </div>
             
                 <p id="restaurant-count">从收藏中找到 <span><span class="number">235</span></span> 个餐厅！</p>

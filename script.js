@@ -19,8 +19,12 @@ let drivingDistances = {};   // { name: { distance(m), duration(s) } }
 let phase1Complete   = false;
 let phase2Complete   = false;
 let phase2InProgress = false;
+let drivingCalcAborted = false;  // 用户点击停止时设为 true
 const PHASE1_MAX_KM      = 15;
 const PHASE2_TRIGGER_MIN = 30;
+const DEFAULT_DISTANCE_KM = 5;  // 直线距离模式下的默认距离（千米）
+const NEAR_SAVED_LOCATION_KM = 2;  // 直线距离在此范围内视为在预存地址
+const NEAR_SAVED_LOCATION_MIN = 15;  // 车程在此分钟内视为在预存地址（原10分钟可能因定位偏差过严）
 
 const API_KEY = 'd111bbe935342b4ac8d1707ff6523552';
 const SUPABASE_URL = 'https://tazccareqiurrsgfzong.supabase.co';
@@ -28,6 +32,17 @@ const SUPABASE_ANON_KEY = '';
 
 // 在文件开头添加这些变量引用
 let loadingMessage, errorMessage, restaurantCount;
+
+// 将预存地址名称格式化为可读形式，如 "北京建外soho西区" -> "建外 SOHO 西区"
+function formatSavedLocationName(locationKey) {
+    if (!locationKey) return '';
+    return locationKey
+        .replace(/^北京|^上海|^广州|^深圳|^杭州|^成都|^西安|^南京|^武汉|^苏州|^天津|^重庆|^青岛|^大连|^厦门|^长沙|^沈阳|^济南|^哈尔滨|^福州|^郑州|^石家庄|^昆明|^南昌|^合肥|^太原|^长春|^南宁|^兰州|^贵阳|^海口|^银川|^西宁|^乌鲁木齐|^拉萨|^呼和浩特/g, '')
+        .replace(/soho/gi, 'SOHO')
+        .replace(/([a-zA-Z]+)/g, ' $1 ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 
 // 添加新的辅助函数：处理地址信息
 function formatAddress(address, province, city) {
@@ -301,6 +316,7 @@ function calculateNearestLocation(userPosition) {
     realDrivingMode = false;
     drivingDistances = {};
     phase1Complete = phase2Complete = phase2InProgress = false;
+    drivingCalcAborted = false;
     hideDrivingStatus();
     showCalcRealDrivingButton(false);
 
@@ -312,7 +328,7 @@ function calculateNearestLocation(userPosition) {
             .then(data => {
                 console.log('Geocode response for location:', location, data);
                 if (data.status === '1' && data.geocodes.length > 0) {
-                    const [lng, lat] = data.geocodes[0].location.split(',');
+                    const [lng, lat] = data.geocodes[0].location.split(',').map(Number);
                     const drivingUrl = `https://restapi.amap.com/v3/direction/driving?origin=${userPosition.lng},${userPosition.lat}&destination=${lng},${lat}&extensions=base&key=${API_KEY}`;
                     return fetch(drivingUrl)
                         .then(response => response.json())
@@ -321,10 +337,10 @@ function calculateNearestLocation(userPosition) {
                             if (data.status === '1' && data.route && data.route.paths && data.route.paths.length > 0) {
                                 const drivingTime = parseInt(data.route.paths[0].duration) / 60;  // 转为分钟
                                 console.log(`Driving time to ${location}: ${drivingTime} minutes`);
-                                return { location, drivingTime };
+                                return { location, drivingTime, lat, lng };
                             }
                             console.log(`Unable to calculate driving time to ${location}`);
-                            return null;
+                            return { location, drivingTime: Infinity, lat, lng };
                         });
                 }
                 console.log(`Unable to geocode location: ${location}`);
@@ -339,24 +355,48 @@ function calculateNearestLocation(userPosition) {
     Promise.all(promises)
         .then(results => {
             console.log('All location calculations completed. Results:', results);
-            results.forEach(result => {
-                if (result && result.drivingTime < minDrivingTime) {
+            const validResults = results.filter(r => r);
+            validResults.forEach(result => {
+                if (result.drivingTime < minDrivingTime) {
                     minDrivingTime = result.drivingTime;
                     nearestLocation = result.location;
                 }
             });
+            let usePreSavedLocation = minDrivingTime <= NEAR_SAVED_LOCATION_MIN;
+            if (!usePreSavedLocation) {
+                // 车程超阈值时，检查直线距离：用户可能在预存地址附近（如建外 SOHO 西区）
+                const R = 6371;
+                const toRad = x => x * Math.PI / 180;
+                const haversine = (lat1, lng1, lat2, lng2) => {
+                    const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+                    const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng/2)**2;
+                    return 2 * R * Math.asin(Math.sqrt(a));
+                };
+                for (const r of validResults) {
+                    if (r.lat != null && r.lng != null) {
+                        const km = haversine(userPosition.lat, userPosition.lng, r.lat, r.lng);
+                        if (km <= NEAR_SAVED_LOCATION_KM) {
+                            nearestLocation = r.location;
+                            usePreSavedLocation = true;
+                            console.log(`使用直线距离匹配预存地址: ${r.location}, ${km.toFixed(2)} km`);
+                            break;
+                        }
+                    }
+                }
+            }
             console.log(`Nearest location: ${nearestLocation}, Driving time: ${minDrivingTime} minutes`);
 
-            // 新增逻辑检查
-            if (minDrivingTime > 10) {
+            if (!usePreSavedLocation) {
                 nearestLocation = userPosition;
-                directDistance = true; // 设置为 true
-                calculateDirectDistance(nearestLocation); // 计算直线距离
+                directDistance = true;
+                calculateDirectDistance(nearestLocation);
                 console.log('计算直线距离');
+            } else {
+                updateLocationPlaceholder(formatSavedLocationName(nearestLocation));
             }
 
             updateTimeFilterUI();
-            updateRestaurantCount(); // 更新餐厅数量
+            updateRestaurantCount();
         })
         .catch(error => {
             console.error('Error in calculateNearestLocation:', error);
@@ -388,8 +428,19 @@ function showCalcRealDrivingButton(show) {
 }
 
 function showDrivingStatus(msg) {
-    document.getElementById('driving-status-text').textContent = msg;
-    document.getElementById('driving-status').classList.remove('hidden');
+    const textEl = document.getElementById('driving-status-text');
+    const statusEl = document.getElementById('driving-status');
+    const fillEl = document.getElementById('driving-progress-fill');
+    if (textEl) textEl.textContent = msg;
+    if (statusEl) statusEl.classList.remove('hidden');
+    if (fillEl) fillEl.style.width = '0%';
+}
+
+function showDrivingProgress(current, total, msg) {
+    const textEl = document.getElementById('driving-status-text');
+    const fillEl = document.getElementById('driving-progress-fill');
+    if (textEl) textEl.textContent = msg || `已计算 ${current}/${total} 家`;
+    if (fillEl && total > 0) fillEl.style.width = `${Math.round((current / total) * 100)}%`;
 }
 
 function hideDrivingStatus() {
@@ -399,6 +450,7 @@ function hideDrivingStatus() {
 
 // ── 真实驾车距离：Phase 1（直线 ≤ 15 km 的餐厅）───────────────────
 function startRealDrivingPhase1() {
+    drivingCalcAborted = false;
     const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
     const cityRestaurants = restaurants.filter(r =>
         compareCityNames(formatCityName(r.city), selectedCity) && r['经纬度']
@@ -411,6 +463,7 @@ function startRealDrivingPhase1() {
     if (phase1List.length === 0) {
         phase1Complete = true;
         realDrivingMode = true;
+        hideDrivingStatus();
         updateTimeFilterUI();
         updateRestaurantCount();
         return;
@@ -418,13 +471,20 @@ function startRealDrivingPhase1() {
 
     showDrivingStatus(`正在计算 ${phase1List.length} 家附近餐厅的真实车程...`);
 
-    calcDrivingBatch(phase1List).then(() => {
+    calcDrivingBatch(phase1List, 10, (done, total) => {
+        showDrivingProgress(done, total, `已计算 ${done}/${total} 家餐厅的真实车程`);
+    }).then(() => {
         phase1Complete = true;
         realDrivingMode = true;
         hideDrivingStatus();
         updateTimeFilterUI();
         updateRestaurantCount();
         console.log('Phase 1 complete, calculated:', Object.keys(drivingDistances).length);
+    }).catch(err => {
+        console.error('Phase 1 error:', err);
+        hideDrivingStatus();
+        updateTimeFilterUI();
+        updateRestaurantCount();
     });
 }
 
@@ -432,6 +492,7 @@ function startRealDrivingPhase1() {
 function startRealDrivingPhase2() {
     if (phase2InProgress || phase2Complete) return;
     phase2InProgress = true;
+    drivingCalcAborted = false;
 
     const selectedCity = formatCityName(document.querySelector('.selected-city').textContent);
     const cityRestaurants = restaurants.filter(r =>
@@ -447,19 +508,29 @@ function startRealDrivingPhase2() {
 
     showDrivingStatus(`正在扩大范围，计算剩余 ${phase2List.length} 家餐厅的车程...`);
 
-    calcDrivingBatch(phase2List).then(() => {
+    calcDrivingBatch(phase2List, 10, (done, total) => {
+        showDrivingProgress(done, total, `已计算 ${done}/${total} 家餐厅的车程`);
+    }).then(() => {
         phase2Complete = true;
         phase2InProgress = false;
         hideDrivingStatus();
         updateTimeFilterUI();
         updateRestaurantCount();
         console.log('Phase 2 complete, total calculated:', Object.keys(drivingDistances).length);
+    }).catch(err => {
+        console.error('Phase 2 error:', err);
+        phase2InProgress = false;
+        hideDrivingStatus();
+        updateTimeFilterUI();
+        updateRestaurantCount();
     });
 }
 
 // ── 真实驾车距离：批量调高德 API（每批 10 个并发）─────────────────
-async function calcDrivingBatch(restaurantList, batchSize = 10) {
+async function calcDrivingBatch(restaurantList, batchSize = 10, progressCallback) {
+    const total = restaurantList.length;
     for (let i = 0; i < restaurantList.length; i += batchSize) {
+        if (drivingCalcAborted) break;
         const batch = restaurantList.slice(i, i + batchSize);
         await Promise.all(batch.map(r => {
             const coords = r['经纬度']; // 高德格式：lng,lat
@@ -477,6 +548,8 @@ async function calcDrivingBatch(restaurantList, batchSize = 10) {
                 })
                 .catch(() => {});
         }));
+        const done = Math.min(i + batchSize, total);
+        if (progressCallback) progressCallback(done, total);
         if (realDrivingMode) updateRestaurantCount();
     }
 }
@@ -594,7 +667,7 @@ function updateTimeFilterUI() {
                 } else if (directDistances.length > 0) { // 确保有计算结果
                     const maxDistance = Math.max(...directDistances.map(d => d.distance));
                     slider.max = Math.min(40, maxDistance); // 设置最大直线距离
-                    slider.value = 10; // 设置默认值
+                    slider.value = DEFAULT_DISTANCE_KM; // 默认 5 千米
                     valueDisplay.textContent = `${slider.value} km 直线距离内`; // 更新单位
                 } else {
                     filterContainer.style.display = 'none'; // 如果没有计算结果，隐藏滑块
@@ -808,7 +881,7 @@ function updateDistanceFilterVisibility() {
     if (userPosition && userCity && compareCityNames(userCity, selectedCity)) {
         console.log('Showing distance filter');
         filterContainer.style.display = 'block';
-        slider.value = directDistance ? "10" : "30";
+        slider.value = directDistance ? String(DEFAULT_DISTANCE_KM) : "30";
         
         // 使用 setTimeout 确保在 DOM 更新后更新背景
         setTimeout(() => {
@@ -841,7 +914,7 @@ function init() {
         const slider = document.getElementById('distance');
         if (slider) {
             console.log('Setting initial slider value');
-            slider.value = directDistance ? "10" : "30";
+            slider.value = directDistance ? String(DEFAULT_DISTANCE_KM) : "30";
             updateSliderBackground(slider);
             updateSlider();
             slider.oninput = updateSlider;
@@ -853,6 +926,11 @@ function init() {
     document.getElementById('calc-real-driving')?.addEventListener('click', () => {
         showCalcRealDrivingButton(false);
         startRealDrivingPhase1();
+    });
+
+    // 停止计算车程按钮
+    document.getElementById('driving-stop-btn')?.addEventListener('click', () => {
+        drivingCalcAborted = true;
     });
 
     // 添加随机选择按钮的事件监听器
