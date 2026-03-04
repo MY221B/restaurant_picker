@@ -130,6 +130,20 @@ rest_data_process/restaurants.csv（最终完整文件）
 
 ## 增加新餐厅数据的操作步骤
 
+### 一键更新（推荐）
+
+将新 CSV 放入 `新餐厅数据/` 后，直接运行：
+
+```bash
+bash update.sh
+```
+
+脚本会依次完成：合并数据 → 获取经纬度 → 计算驾车距离 → 推送到 GitHub。任意步骤失败时自动停止。
+
+---
+
+### 分步执行（需要调试时使用）
+
 ### 前置条件
 
 - Python 3 + pandas、requests 库
