@@ -348,7 +348,7 @@ function calculateNearestLocation(userPosition) {
             console.log(`Nearest location: ${nearestLocation}, Driving time: ${minDrivingTime} minutes`);
 
             // 新增逻辑检查
-            if (minDrivingTime > 30) {
+            if (minDrivingTime > 10) {
                 nearestLocation = userPosition;
                 directDistance = true; // 设置为 true
                 calculateDirectDistance(nearestLocation); // 计算直线距离
